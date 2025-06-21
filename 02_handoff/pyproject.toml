@@ -1,11 +1,10 @@
 [project]
-name = "01-agent"
+name = "02-handoff"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "dotenv>=0.9.9",
-    "openai>=1.88.0",
-    "openai-agents>=0.0.19",
+    "openai-agents[litellm]>=0.0.19",
 ]
