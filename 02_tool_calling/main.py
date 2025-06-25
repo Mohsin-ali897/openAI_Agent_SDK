@@ -1,9 +1,11 @@
 import os
-import requests
+import requests  # type: ignore
 import json
-from agents import Agent, Runner, AsyncOpenAI, RunConfig, OpenAIChatCompletionsModel,function_tool # type:ignore
+from typing import List, Dict, Optional
+from agents import Agent, Runner, AsyncOpenAI, RunConfig, OpenAIChatCompletionsModel,function_tool,enable_verbose_stdout_logging # type:ignore
 from dotenv import load_dotenv, find_dotenv # type: ignore
 from agents.extensions.models.litellm_model import LitellmModel # type: ignore
+# enable_verbose_stdout_logging()
 
 #? step 1: load the environment variables 
 gemini_api_key = os.getenv("GEMINI_API_KEY")
@@ -27,6 +29,15 @@ model = OpenAIChatCompletionsModel(
     model = 'gemini-2.0-flash', 
     openai_client = provider,
 )
+
+#? step 4: setting up the configuration for the agent 
+
+run_config = RunConfig(
+    model = model,
+    model_provider = provider,
+    tracing_disabled = True,
+)
+
 @function_tool
 def convert_usd_to_currency(amount_usd, target_currency):
     """
@@ -135,24 +146,87 @@ def get_weather(location):
         print(f"Error parsing response: Missing key {e}")
         return None
 
+@function_tool
+def google_search(query: str, num_results: int = 5) -> Dict:
+    """
+    Perform a search using Google Custom Search JSON API and return structured results.
+    
+    Args:
+        query (str): The search query string.
+        num_results (int): Number of results to return (1-10, default 5).
+    
+    Returns:
+        Dict: A dictionary containing:
+            - success (bool): Whether the search was successful.
+            - results (List[Dict]): List of search results, each with title, url, and snippet.
+            - error (str, optional): Error message if the search failed.
+    """
+    # Validate inputs
+    
+    #? CX id 
+    cx='868b0d9fe53dd4feb'
+    #? api key 
+    api_key = 'AIzaSyAYBVgW0-PT_88Gl-GPhIHrCRj9tvWI-t8'
+    if not query.strip():
+        return {"success": False, "results": [], "error": "Query cannot be empty"}
+    if not api_key or not cx:
+        return {"success": False, "results": [], "error": "API key and CX ID are required"}
+    if not 1 <= num_results <= 10:
+        return {"success": False, "results": [], "error": "Number of results must be between 1 and 10"}
 
-#? step 4: setting up the configuration for the agent 
+    # Construct the API request URL
+    url = "https://www.googleapis.com/customsearch/v1"
+    params = {
+        "key": api_key,
+        "cx": cx,
+        "q": query,
+        "num": num_results,
+        "safe": "active",  # Enable safe search to filter explicit content
+    }
 
-run_config = RunConfig(
-    model = model,
-    model_provider = provider,
-    tracing_disabled = True,
-)
+    try:
+        # Make the API request
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()  # Raise an exception for HTTP errors
+        data = response.json()
+
+        # Check if the response contains items
+        if "items" not in data or not data["items"]:
+            return {"success": True, "results": [], "error": "No results found"}
+
+        # Parse results
+        results = [
+            {
+                "title": item.get("title", "No title"),
+                "url": item.get("link", "#"),
+                "snippet": item.get("snippet", "No snippet available")
+            }
+            for item in data["items"]
+        ]
+
+        return {"success": True, "results": results}
+
+    except requests.exceptions.HTTPError as e:
+        error_msg = f"HTTP error: {str(e)}"
+        if response.status_code == 429:
+            error_msg = "API quota exceeded or rate limit reached"
+        return {"success": False, "results": [], "error": error_msg}
+    except requests.exceptions.RequestException as e:
+        return {"success": False, "results": [], "error": f"Network error: {str(e)}"}
+    except ValueError:
+        return {"success": False, "results": [], "error": "Invalid JSON response from API"}
+    except Exception as e:
+        return {"success": False, "results": [], "error": f"Unexpected error: {str(e)}"}
+    
+# result = google_search('who is Rajab butt')
+# for i in result:
+#     print(f'key {result}  value is {result[i]} ')
+#     print('__'*10)
+# print(result)
 
 
 #? step 5: setting up the agent
 
-# agent:Agent = Agent(
-#     name='Assistant',
-#     instructions='When the user asks about achieving success in life, mastering the dynamics of power, or navigating politics, always respond as a strategic mastermind or seasoned CIA operative. Craft your answers to exude intelligence, confidence, and deep expertise in politics, influence, and power dynamics, making the user feel they are receiving unparalleled insights from a highly knowledgeable and authoritative chatbot."',
-#     model = LitellmModel(model=open_router_Model_openai, api_key=open_router_api_key),
-#     tools = []
-# )
 agent:Agent = Agent(
     name='Assistant',
     instructions='"you are a currency convertor agent and use convert_usd_to_currency tools it take a two argument amount_usd and  target_currency pass a argument how much dollar and a targeted currency  convert dollar into targeted currency"',
@@ -165,7 +239,16 @@ weather_agent:Agent = Agent(
     model = LitellmModel(model=open_router_Model_openai4o_min, api_key=open_router_api_key),
     tools = [get_weather]
 )
+Search_agent:Agent = Agent(
+    name='Search_agent',
+    instructions='You are an Search Agent - please keep going until the user’s query is completely resolved, before ending your turn and yielding back to the user. Only terminate your turn when you are sure that the problem is solved. Use google_search tool it,s require two argument first is query to  search the specific topic and second is default if user not ask it how many number of result it is want don,t do it and go with default parameter,s value and return the search result to the user You MUST plan extensively before function call, and reflect extensively on the outcomes of the previous function calls. DO NOT do this entire process by making function calls only, as this can impair your ability to solve the problem and think insightfully. and give atleast a some long context answer',
+    model= LitellmModel(model=open_router_Model_openai4o_min, api_key=open_router_api_key),
+    tools = [google_search]
+)
 Result = Runner.run_sync(agent, 'I have a 20 dollar converted it into chinese currency ', run_config=run_config)
 print(Result.final_output)
 Result = Runner.run_sync(weather_agent, 'what about weather in karachi, pakistan.', run_config=run_config)
 print(Result.final_output)
+user_input = input('Enter Your Search: ')
+google_agent =  Runner.run_sync(Search_agent,user_input, run_config=run_config)
+print(google_agent.final_output)
